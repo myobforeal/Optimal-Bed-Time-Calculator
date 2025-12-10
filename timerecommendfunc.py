@@ -31,7 +31,8 @@ DEFAULT_PARAMS = dict(
     alpha=0.0,   # light coupling (unused here, L=0)
     c=0.0,       # stress coupling (unused here, C=0)
     T_target=7.5,  # ideal effective sleep duration [h]
-    lam4=0.2       # penalty weight for deviation from T_target
+    lam4=0.2,      # penalty weight for deviation from T_target
+    beta_caff=0.6  # caffeine suppresses melatonin / sleep drive
 )
 
 OMEGA = 2.0 * np.pi / 24.0    # 24 h circadian frequency
@@ -77,7 +78,8 @@ def hours_to_hhmm(t):
 def melatonin_rhs(t, y, params, t_caff_last):
     """
     Right-hand side of melatonin ODE:
-        dy/dt = -K*y + A + B cos(omega t + phi) + U(t)
+        dy/dt = -K*y + A + B cos(omega t + phi)
+                - alpha L(t) - c C(t) - beta_caff U(t)
 
     Caffeine: U(t) = 1 for 6 h after last caffeine, else 0.
     Light L(t) and stress C(t) are set to 0 in this recommendation mode.
@@ -93,7 +95,7 @@ def melatonin_rhs(t, y, params, t_caff_last):
     alpha = params.get("alpha", 0.0)
     c = params.get("c", 0.0)
 
-    # Caffeine input: one rectangular pulse of height 1
+    # Caffeine input: one rectangular pulse
     if t_caff_last is None:
         U = 0.0
     else:
@@ -102,7 +104,10 @@ def melatonin_rhs(t, y, params, t_caff_last):
         else:
             U = 0.0
 
-    forcing = A + B * np.cos(OMEGA * t + phi) - alpha * L - c * C + U
+    beta = params.get("beta_caff", 0.6)
+
+    # NOTE: caffeine now SUPPRESSES melatonin (minus sign!)
+    forcing = A + B * np.cos(OMEGA * t + phi) - alpha * L - c * C - beta * U
     return -K * y + forcing
 
 
@@ -195,6 +200,8 @@ def simulate_night(t_bed, t_wake, t_caff_last, params=None,
                    dt=1.0/12.0, history_hours=10.0):
     """
     Simulate melatonin and sleep propensity around a single night.
+
+    t_bed, t_wake, t_caff_last are all in hours (can exceed 24).
     """
     if params is None:
         params = DEFAULT_PARAMS
@@ -302,6 +309,10 @@ if __name__ == "__main__":
         t_caff_last = None
     else:
         t_caff_last = parse_time_hhmm(caff_str)
+        # If caffeine time is "in the future" relative to now (weird input),
+        # assume it was actually yesterday:
+        if t_caff_last > t_now:
+            t_caff_last -= 24.0
 
     best_tbed, best_Q, metrics = recommend_bedtime(
         t_now, t_wake, t_caff_last, params=DEFAULT_PARAMS
